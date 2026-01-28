@@ -1,49 +1,57 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
 const cron = require('node-cron');
-const fs = require('fs');
-const path = require('path');
+const { Redis } = require('@upstash/redis'); // 📦 เรียกใช้ Redis
 
-// ================== CONFIG ==================
+// ================== CONFIG (ตั้งค่า) ==================
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.CHANNEL_SECRET
 };
 
+// 🔥 ใช้ Environment Variables เพื่อความปลอดภัย
+// ตรงนี้จะดึง URL และ Token จากการตั้งค่าใน Render (ไม่ใส่รหัสตรงๆ ในโค้ด)
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+
 const client = new line.Client(config);
 const app = express();
 
-// ================== FILE-BASED STORAGE ==================
-const DATA_FILE = path.join(__dirname, 'data.json');
-
-// ฟังก์ชันช่วยดึงเวลาไทย
+// ================== HELPER: TIMEZONE (จัดการเวลา) ==================
+// ฟังก์ชันช่วยดึงเวลาไทย (แก้ปัญหา Server เวลาไม่ตรง)
 function getThaiDate() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
 }
 
-function loadData() {
+// ================== REDIS STORAGE (ส่วนเก็บข้อมูล) ==================
+
+// 📥 โหลดข้อมูล: เปลี่ยนจากอ่านไฟล์ มาเป็นอ่านจาก Redis
+async function loadData() {
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const raw = fs.readFileSync(DATA_FILE, 'utf8');
-      return JSON.parse(raw);
-    }
+    const data = await redis.get('medicine_bot_data');
+    return data || {}; // ถ้าไม่มีข้อมูล ให้คืนค่าว่างกลับไป
   } catch (error) {
     console.error('Error loading data:', error);
+    return {};
   }
-  return {};
 }
 
-function saveData(data) {
+// 💾 บันทึกข้อมูล: เปลี่ยนจากเขียนไฟล์ เป็นส่งไปเก็บที่ Redis
+async function saveData(data) {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+    await redis.set('medicine_bot_data', data);
   } catch (error) {
     console.error('Error saving data:', error);
   }
 }
 
-function getUser(userId) {
-  const data = loadData();
+// ดึงข้อมูล User (ต้องมี async เพราะต้องรอ Redis)
+async function getUser(userId) {
+  const data = await loadData();
   if (!data[userId]) {
+    // ถ้ายังไม่มี User นี้ ให้สร้างใหม่
     data[userId] = {
       medicines: [],
       settings: {
@@ -52,18 +60,20 @@ function getUser(userId) {
       },
       alertedMedicines: {}
     };
-    saveData(data);
+    await saveData(data);
   }
   return data[userId];
 }
 
-function saveUser(userId, userData) {
-  const data = loadData();
+// บันทึกข้อมูล User (ต้องมี async)
+async function saveUser(userId, userData) {
+  const data = await loadData();
   data[userId] = userData;
-  saveData(data);
+  await saveData(data);
 }
 
-// ================== REMINDER STATE ==================
+// ================== REMINDER STATE (สถานะการรอเตือน) ==================
+// ส่วนนี้ใช้ Memory ชั่วคราวได้ เพราะเป็นการรอแค่ 30 นาที ไม่ซีเรียสถ้าหายตอน Restart
 const pendingReminders = new Map();
 
 function setPendingReminder(userId, timeSlot) {
@@ -72,6 +82,7 @@ function setPendingReminder(userId, timeSlot) {
     timestamp: Date.now()
   });
   
+  // ลบสถานะทิ้งถ้าผ่านไป 30 นาทีแล้วยังไม่ตอบ
   setTimeout(() => {
     pendingReminders.delete(userId);
   }, 30 * 60 * 1000);
@@ -81,19 +92,20 @@ function getPendingReminder(userId) {
   const pending = pendingReminders.get(userId);
   if (!pending) return null;
   
+  // เช็คอีกรอบว่าเกิน 30 นาทีไหม
   const elapsed = Date.now() - pending.timestamp;
   if (elapsed > 30 * 60 * 1000) {
     pendingReminders.delete(userId);
     return null;
   }
-  
   return pending;
 }
 
-// ================== MEDICINE FUNCTIONS ==================
+// ================== MEDICINE FUNCTIONS (ฟังก์ชันเกี่ยวกับยา) ==================
 
-function addMedicine(userId, name, totalPills, pillsPerDose, timeSlot) {
-  const user = getUser(userId);
+// เพิ่มยาใหม่
+async function addMedicine(userId, name, totalPills, pillsPerDose, timeSlot) {
+  const user = await getUser(userId); // ต้องรอข้อมูลจาก Redis
   
   const medicine = {
     id: `med_${Date.now()}`,
@@ -106,13 +118,14 @@ function addMedicine(userId, name, totalPills, pillsPerDose, timeSlot) {
   };
   
   user.medicines.push(medicine);
-  saveUser(userId, user);
+  await saveUser(userId, user); // บันทึกกลับเข้า Redis
   
   return medicine;
 }
 
-function takeMedicine(userId, medicineId) {
-  const user = getUser(userId);
+// กินยา (ตัดสต็อก)
+async function takeMedicine(userId, medicineId) {
+  const user = await getUser(userId);
   const medicine = user.medicines.find(m => m.id === medicineId);
   
   if (!medicine) {
@@ -124,20 +137,23 @@ function takeMedicine(userId, medicineId) {
   }
   
   medicine.remainingPills -= medicine.pillsPerDose;
-  saveUser(userId, user);
   
+  // --- ส่วนเช็คยาใกล้หมด ---
   let lowStockAlert = null;
   const alertKey = `${medicineId}`;
   
+  // เตือนครั้งที่ 2 (เหลือ <= 5 เม็ด)
   if (medicine.remainingPills <= 5 && (!user.alertedMedicines[alertKey] || user.alertedMedicines[alertKey] < 2)) {
     lowStockAlert = { medicine, alertNumber: 2 };
     user.alertedMedicines[alertKey] = 2;
-    saveUser(userId, user);
-  } else if (medicine.remainingPills <= 10 && medicine.remainingPills > 5 && !user.alertedMedicines[alertKey]) {
+  } 
+  // เตือนครั้งที่ 1 (เหลือ <= 10 เม็ด)
+  else if (medicine.remainingPills <= 10 && medicine.remainingPills > 5 && !user.alertedMedicines[alertKey]) {
     lowStockAlert = { medicine, alertNumber: 1 };
     user.alertedMedicines[alertKey] = 1;
-    saveUser(userId, user);
   }
+
+  await saveUser(userId, user);
   
   return { 
     success: true, 
@@ -146,8 +162,9 @@ function takeMedicine(userId, medicineId) {
   };
 }
 
-function refillMedicine(userId, medicineName, amount) {
-  const user = getUser(userId);
+// เติมยา
+async function refillMedicine(userId, medicineName, amount) {
+  const user = await getUser(userId);
   const medicine = user.medicines.find(m => 
     m.name.toLowerCase().includes(medicineName.toLowerCase())
   );
@@ -157,14 +174,20 @@ function refillMedicine(userId, medicineName, amount) {
   }
   
   medicine.remainingPills += parseInt(amount);
-  delete user.alertedMedicines[medicine.id];
-  saveUser(userId, user);
+  
+  // ลบประวัติการเตือนยาหมด เพื่อให้เตือนใหม่ได้ในรอบหน้า
+  if (user.alertedMedicines && user.alertedMedicines[medicine.id]) {
+      delete user.alertedMedicines[medicine.id];
+  }
+
+  await saveUser(userId, user);
   
   return { success: true, medicine };
 }
 
-function setTime(userId, slot, time) {
-  const user = getUser(userId);
+// ตั้งเวลา
+async function setTime(userId, slot, time) {
+  const user = await getUser(userId);
   
   if (slot === 1) {
     user.settings.time1 = time;
@@ -172,12 +195,13 @@ function setTime(userId, slot, time) {
     user.settings.time2 = time;
   }
   
-  saveUser(userId, user);
+  await saveUser(userId, user);
   return user.settings;
 }
 
-function deleteMedicine(userId, medicineName) {
-  const user = getUser(userId);
+// ลบยา
+async function deleteMedicine(userId, medicineName) {
+  const user = await getUser(userId);
   const index = user.medicines.findIndex(m => 
     m.name.toLowerCase().includes(medicineName.toLowerCase())
   );
@@ -187,13 +211,18 @@ function deleteMedicine(userId, medicineName) {
   }
   
   const deleted = user.medicines.splice(index, 1)[0];
-  delete user.alertedMedicines[deleted.id];
-  saveUser(userId, user);
+  
+  // ลบข้อมูลการแจ้งเตือนของยาตัวนี้ด้วย
+  if (user.alertedMedicines && user.alertedMedicines[deleted.id]) {
+    delete user.alertedMedicines[deleted.id];
+  }
+
+  await saveUser(userId, user);
   
   return { success: true, medicine: deleted };
 }
 
-// ================== MESSAGE BUILDERS ==================
+// ================== MESSAGE BUILDERS (สร้างข้อความตอบกลับ) ==================
 
 function createReminderMessage(medicines, timeSlot, settings) {
   const timeDisplay = timeSlot === 1 ? settings.time1 : settings.time2;
@@ -255,53 +284,55 @@ function createDailySummary(user) {
   return message;
 }
 
-// ================== WEBHOOK HANDLER ==================
+// ================== WEBHOOK HANDLER (รับข้อความจาก LINE) ==================
 
-app.post('/webhook', line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then(result => res.json(result))
-    .catch(err => {
-      console.error(err);
-      res.status(500).end();
-    });
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  try {
+    // ใช้ Promise.all เพื่อรอให้บอทตอบเสร็จทุกข้อความก่อน
+    const results = await Promise.all(req.body.events.map(handleEvent));
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).end();
+  }
 });
 
 async function handleEvent(event) {
   if (event.type !== 'message') {
-    return Promise.resolve(null);
+    return null;
   }
   
   const userId = event.source.userId;
-  const user = getUser(userId);
+  const user = await getUser(userId); // โหลด User จาก Redis
   
-  // 🎉 STICKER HANDLER - รับ Sticker ทุกตัว!
+  // 🎉 ถ้าส่ง Sticker มา (ถือว่ากินยา)
   if (event.message.type === 'sticker') {
-    return handleStickerMessage(event, userId, user);
+    return await handleStickerMessage(event, userId, user);
   }
   
-  // 📝 TEXT HANDLER
+  // 📝 ถ้าพิมพ์ข้อความมา
   if (event.message.type === 'text') {
-    return handleTextMessage(event, userId, user);
+    return await handleTextMessage(event, userId, user);
   }
   
-  return Promise.resolve(null);
+  return null;
 }
 
-// ================== 🎉 STICKER HANDLER ==================
+// ================== STICKER HANDLER (จัดการสติกเกอร์) ==================
 
 async function handleStickerMessage(event, userId, user) {
   const pending = getPendingReminder(userId);
   
   if (!pending) {
-    // 🔥 แก้ตรงนี้: ใช้ getThaiDate()
+    // ถ้าไม่มีการรอเตือน ให้เช็คเวลาปัจจุบัน
     const now = getThaiDate();
     const currentHour = now.getHours();
     
-    // ... (code ส่วนที่เหลือเหมือนเดิม)
     const time1Hour = parseInt(user.settings.time1.split(':')[0]);
     const time2Hour = parseInt(user.settings.time2.split(':')[0]);
     
     let currentSlot = null;
+    // อนุโลมให้ตอบก่อน/หลังเวลาได้ 2 ชั่วโมง
     if (Math.abs(currentHour - time1Hour) <= 2) {
       currentSlot = 1;
     } else if (Math.abs(currentHour - time2Hour) <= 2) {
@@ -315,13 +346,14 @@ async function handleStickerMessage(event, userId, user) {
       });
     }
     
-    return processTakeMedicine(event, userId, user, currentSlot);
+    return await processTakeMedicine(event, userId, user, currentSlot);
   }
   
-  return processTakeMedicine(event, userId, user, pending.timeSlot);
+  // ถ้ามีการรอเตือนอยู่ (Pending) ให้ถือว่าตอบรับรอบนั้น
+  return await processTakeMedicine(event, userId, user, pending.timeSlot);
 }
 
-// ================== PROCESS TAKE MEDICINE ==================
+// ================== PROCESS TAKE MEDICINE (ประมวลผลการกินยา) ==================
 
 async function processTakeMedicine(event, userId, user, timeSlot) {
   const medicinesToTake = user.medicines.filter(m => 
@@ -339,7 +371,8 @@ async function processTakeMedicine(event, userId, user, timeSlot) {
   const lowStockAlerts = [];
   
   for (const med of medicinesToTake) {
-    const result = takeMedicine(userId, med.id);
+    const result = await takeMedicine(userId, med.id); 
+    
     if (result.success) {
       resultMessage += `\n💊 ${result.medicine.name}\n`;
       resultMessage += `   • กิน ${result.medicine.pillsPerDose} เม็ด\n`;
@@ -358,6 +391,7 @@ async function processTakeMedicine(event, userId, user, timeSlot) {
   
   const messages = [{ type: 'text', text: resultMessage }];
   
+  // แทรกข้อความเตือนยาหมด ถ้ามี
   for (const alert of lowStockAlerts) {
     messages.push({
       type: 'text',
@@ -368,12 +402,12 @@ async function processTakeMedicine(event, userId, user, timeSlot) {
   return client.replyMessage(event.replyToken, messages);
 }
 
-// ================== 📝 TEXT HANDLER ==================
+// ================== TEXT HANDLER (จัดการข้อความ) ==================
 
 async function handleTextMessage(event, userId, user) {
   const text = event.message.text.trim();
   
-  // 📋 ดูรายการยา
+  // --- ดูรายการยา ---
   if (/^(ยา|รายการยา|ดูยา)$/i.test(text)) {
     if (!user.medicines || user.medicines.length === 0) {
       return client.replyMessage(event.replyToken, {
@@ -381,20 +415,16 @@ async function handleTextMessage(event, userId, user) {
         text: '📭 คุณยังไม่มียาในระบบ\n\nพิมพ์ "เพิ่ม [ชื่อยา] [จำนวน] [เม็ด/ครั้ง] [1 หรือ 2]"\nตัวอย่าง: เพิ่ม พาราเซตามอล 30 2 1'
       });
     }
-    
     const summary = createDailySummary(user);
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: summary
-    });
+    return client.replyMessage(event.replyToken, { type: 'text', text: summary });
   }
   
-  // ➕ เพิ่มยา
+  // --- เพิ่มยา ---
   const addMatch = text.match(/^เพิ่ม\s+(.+?)\s+(\d+)\s+(\d+)\s+([12])$/i);
   if (addMatch) {
     const [, name, total, perDose, slot] = addMatch;
-    const medicine = addMedicine(userId, name, total, perDose, slot);
-    const updatedUser = getUser(userId);
+    const medicine = await addMedicine(userId, name, total, perDose, slot);
+    const updatedUser = await getUser(userId);
     const timeDisplay = slot === '1' ? updatedUser.settings.time1 : updatedUser.settings.time2;
     
     return client.replyMessage(event.replyToken, {
@@ -403,14 +433,13 @@ async function handleTextMessage(event, userId, user) {
     });
   }
   
-  // ⏰ ตั้งเวลา
+  // --- ตั้งเวลา ---
   const timeMatch = text.match(/^ตั้งเวลา\s*([12])\s+(\d{1,2})[.:](\d{2})$/i);
   if (timeMatch) {
     const [, slot, hour, minute] = timeMatch;
     const timeStr = `${hour.padStart(2, '0')}:${minute}`;
-    setTime(userId, parseInt(slot), timeStr);
-    
-    const updatedUser = getUser(userId);
+    await setTime(userId, parseInt(slot), timeStr);
+    const updatedUser = await getUser(userId);
     
     return client.replyMessage(event.replyToken, {
       type: 'text',
@@ -418,17 +447,16 @@ async function handleTextMessage(event, userId, user) {
     });
   }
   
-  // ✅ กินยาแล้ว
+  // --- แจ้งกินยาแล้ว ---
   if (/^(กินแล้ว|กินยาแล้ว|ทานแล้ว|ok|โอเค)$/i.test(text)) {
     const pending = getPendingReminder(userId);
-    
-    const now = new Date();
+    const now = getThaiDate();
     const currentHour = now.getHours();
+    
     const time1Hour = parseInt(user.settings.time1.split(':')[0]);
     const time2Hour = parseInt(user.settings.time2.split(':')[0]);
     
     let currentSlot = pending?.timeSlot || null;
-    
     if (!currentSlot) {
       if (Math.abs(currentHour - time1Hour) <= 2) {
         currentSlot = 1;
@@ -443,39 +471,29 @@ async function handleTextMessage(event, userId, user) {
         text: '❓ ไม่พบยาที่ต้องกินในเวลานี้\n\nพิมพ์ "กิน [ชื่อยา]" เพื่อระบุยาที่ต้องการ\nหรือ "กินยา 1" / "กินยา 2" เพื่อระบุเวลา'
       });
     }
-    
-    return processTakeMedicine(event, userId, user, currentSlot);
+    return await processTakeMedicine(event, userId, user, currentSlot);
   }
   
-  // ✅ กินยาเวลาที่ 1 หรือ 2
+  // --- กินยาตามรอบเวลา (1 หรือ 2) ---
   const takeSlotMatch = text.match(/^กินยา\s*([12])$/i);
   if (takeSlotMatch) {
     const [, slot] = takeSlotMatch;
-    return processTakeMedicine(event, userId, user, parseInt(slot));
+    return await processTakeMedicine(event, userId, user, parseInt(slot));
   }
   
-  // 💊 กินยาเฉพาะตัว
+  // --- กินยาเฉพาะตัว (ระบุชื่อ) ---
   const takeMatch = text.match(/^กิน\s+(.+)$/i);
   if (takeMatch) {
     const [, medicineName] = takeMatch;
-    const medicine = user.medicines.find(m => 
-      m.name.toLowerCase().includes(medicineName.toLowerCase())
-    );
+    const medicine = user.medicines.find(m => m.name.toLowerCase().includes(medicineName.toLowerCase()));
     
     if (!medicine) {
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `❌ ไม่พบยา "${medicineName}" ในระบบ`
-      });
+      return client.replyMessage(event.replyToken, { type: 'text', text: `❌ ไม่พบยา "${medicineName}" ในระบบ` });
     }
     
-    const result = takeMedicine(userId, medicine.id);
-    
+    const result = await takeMedicine(userId, medicine.id);
     if (!result.success) {
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: result.message
-      });
+      return client.replyMessage(event.replyToken, { type: 'text', text: result.message });
     }
     
     const messages = [{
@@ -489,64 +507,42 @@ async function handleTextMessage(event, userId, user) {
         text: createLowStockMessage(result.lowStockAlert.medicine, result.lowStockAlert.alertNumber)
       });
     }
-    
     return client.replyMessage(event.replyToken, messages);
   }
   
-  // 📦 เติมยา
+  // --- เติมยา ---
   const refillMatch = text.match(/^เติม\s+(.+?)\s+(\d+)$/i);
   if (refillMatch) {
     const [, medicineName, amount] = refillMatch;
-    const result = refillMedicine(userId, medicineName, amount);
-    
+    const result = await refillMedicine(userId, medicineName, amount);
     if (!result.success) {
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: result.message
-      });
+      return client.replyMessage(event.replyToken, { type: 'text', text: result.message });
     }
-    
     return client.replyMessage(event.replyToken, {
       type: 'text',
       text: `✅ เติมยาสำเร็จ!\n\n💊 ${result.medicine.name}\n   • เติม ${amount} เม็ด\n   • รวมคงเหลือ ${result.medicine.remainingPills} เม็ด`
     });
   }
   
-  // 🗑️ ลบยา
+  // --- ลบยา ---
   const deleteMatch = text.match(/^ลบ\s+(.+)$/i);
   if (deleteMatch) {
     const [, medicineName] = deleteMatch;
-    const result = deleteMedicine(userId, medicineName);
-    
+    const result = await deleteMedicine(userId, medicineName);
     if (!result.success) {
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: result.message
-      });
+      return client.replyMessage(event.replyToken, { type: 'text', text: result.message });
     }
-    
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: `✅ ลบยา "${result.medicine.name}" แล้ว`
-    });
+    return client.replyMessage(event.replyToken, { type: 'text', text: `✅ ลบยา "${result.medicine.name}" แล้ว` });
   }
   
-  // 📊 สรุป/สถานะ
+  // --- ดูสรุป ---
   if (/^(สรุป|สถานะ|status)$/i.test(text)) {
     const summary = createDailySummary(user);
-    if (!summary) {
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: '📭 ไม่มียาในระบบ'
-      });
-    }
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: summary
-    });
+    if (!summary) return client.replyMessage(event.replyToken, { type: 'text', text: '📭 ไม่มียาในระบบ' });
+    return client.replyMessage(event.replyToken, { type: 'text', text: summary });
   }
   
-  // ⏰ ดูเวลา
+  // --- ดูเวลา ---
   if (/^(เวลา|ดูเวลา)$/i.test(text)) {
     return client.replyMessage(event.replyToken, {
       type: 'text',
@@ -554,63 +550,35 @@ async function handleTextMessage(event, userId, user) {
     });
   }
   
-  // ❓ Help
+  // --- Help / ช่วยเหลือ ---
   if (/^(help|ช่วยเหลือ|คำสั่ง|วิธีใช้|\?)$/i.test(text)) {
     return client.replyMessage(event.replyToken, {
       type: 'text',
       text: `💊 คำสั่ง Medicine Bot
 ━━━━━━━━━━━━━━━━━━
-
-📋 ดูรายการยา
-   พิมพ์: ยา
-
-➕ เพิ่มยา
-   พิมพ์: เพิ่ม [ชื่อ] [จำนวน] [เม็ด/ครั้ง] [1 หรือ 2]
-   ตัวอย่าง: เพิ่ม ยาลดความดัน 30 1 1
-
-✅ บันทึกกินยา
-   • พิมพ์: กินแล้ว / ok
-   • ส่ง Sticker อะไรก็ได้!
-   • พิมพ์: กินยา 1 / กินยา 2
-   • พิมพ์: กิน [ชื่อยา]
-
-📦 เติมยา
-   พิมพ์: เติม [ชื่อยา] [จำนวน]
-
-🗑️ ลบยา
-   พิมพ์: ลบ [ชื่อยา]
-
-⏰ ตั้งเวลา
-   พิมพ์: ตั้งเวลา 1 08.00
-   พิมพ์: ตั้งเวลา 2 20.00
-
-📊 ดูสรุป
-   พิมพ์: สรุป
-
-━━━━━━━━━━━━━━━━━━
-🔔 บอทเตือนอัตโนมัติ:
-• เตือนกินยาตามเวลาที่ตั้ง
-• สรุปยาทุกวันตอนเที่ยง
-• เตือนยาเหลือ 10/5 เม็ด`
+📋 ดูรายการยา: พิมพ์ "ยา"
+➕ เพิ่มยา: พิมพ์ "เพิ่ม [ชื่อ] [จำนวน] [เม็ด/ครั้ง] [1 หรือ 2]"
+✅ กินยา: พิมพ์ "กินแล้ว", ส่งสติกเกอร์, หรือ "กิน [ชื่อยา]"
+📦 เติมยา: พิมพ์ "เติม [ชื่อยา] [จำนวน]"
+🗑️ ลบยา: พิมพ์ "ลบ [ชื่อยา]"
+⏰ ตั้งเวลา: พิมพ์ "ตั้งเวลา 1 08.00"
+📊 ดูสรุป: พิมพ์ "สรุป"`
     });
   }
   
-  // Default
-  return client.replyMessage(event.replyToken, {
-    type: 'text',
-    text: '💊 พิมพ์ "help" เพื่อดูคำสั่งทั้งหมด'
-  });
+  return client.replyMessage(event.replyToken, { type: 'text', text: '💊 พิมพ์ "help" เพื่อดูคำสั่งทั้งหมด' });
 }
 
-// ================== SCHEDULED JOBS ==================
+// ================== SCHEDULED JOBS (งานที่ตั้งเวลาไว้) ==================
 
+// แจ้งเตือนกินยา
 async function sendReminders(timeSlot) {
-  const data = loadData();
+  const data = await loadData(); // รอโหลดข้อมูลจาก Redis
   
   for (const [userId, user] of Object.entries(data)) {
     const targetTime = timeSlot === 1 ? user.settings.time1 : user.settings.time2;
     
-    // 🔥 แก้ตรงนี้: ใช้ getThaiDate() แทน new Date()
+    // ใช้เวลาไทยในการเช็ค
     const now = getThaiDate();
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     
@@ -632,8 +600,9 @@ async function sendReminders(timeSlot) {
   }
 }
 
+// ส่งสรุปยาทุกเที่ยงวัน
 async function sendDailySummary() {
-  const data = loadData();
+  const data = await loadData();
   
   for (const [userId, user] of Object.entries(data)) {
     const summary = createDailySummary(user);
@@ -654,16 +623,16 @@ cron.schedule('* * * * *', () => {
   sendReminders(2);
 }, { timezone: 'Asia/Bangkok' });
 
-// สรุปยาทุกวันตอนเที่ยง
+// สรุปยอดตอน 12.00
 cron.schedule('0 12 * * *', () => {
   console.log('📊 Sending daily summaries...');
   sendDailySummary();
 }, { timezone: 'Asia/Bangkok' });
 
-// ================== SERVER ==================
+// ================== SERVER START ==================
 
 app.get('/', (req, res) => {
-  res.send('💊 Medicine Bot is running!');
+  res.send('💊 Medicine Bot (Redis + Secure + Thai Comments) is running!');
 });
 
 const PORT = process.env.PORT || 3000;
