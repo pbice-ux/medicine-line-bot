@@ -180,3 +180,100 @@ medicine-line-bot/
 ├── .gitignore        # ไฟล์ที่ไม่ต้อง push
 ├── README.md         # เอกสารนี้
 └── data.json         # ข้อมูล user (สร้างอัตโนมัติ, ไม่ push ขึ้น Git)
+
+🔐 ความปลอดภัย
+ข้อมูลที่เก็บใน GitHub (Public)
+ไฟล์	ความปลอดภัย
+index.js	✅ ปลอดภัย - เป็นแค่ Logic
+package.json	✅ ปลอดภัย - แค่รายชื่อ package
+.gitignore	✅ ปลอดภัย
+
+ข้อมูลที่ไม่อยู่ใน GitHub
+ไฟล์/ข้อมูล	เก็บที่ไหน
+data.json	เก็บใน Render Server (ไม่ push)
+.env	ไม่ได้ใช้ (ใช้ Environment Variables แทน)
+Channel Secret	Render Environment Variables
+Access Token	Render Environment Variables
+
+🔒 Keys สำคัญ เก็บไว้ใน Render Environment Variables เท่านั้น ไม่มีในโค้ด
+
+⚠️ ข้อจำกัด
+Render Free Tier
+ข้อจำกัด	รายละเอียด	วิธีแก้
+Sleep after 15 min	หยุดทำงานเมื่อไม่มี request 15 นาที	ใช้ UptimeRobot ping ทุก 5 นาที
+750 hours/month	ใช้ได้ 750 ชั่วโมงต่อเดือน	เพียงพอสำหรับใช้งานทั่วไป
+Disk ไม่ persistent	ไฟล์อาจหายเมื่อ redeploy	ใช้ JSONBin หรือ MongoDB Atlas (ฟรี)
+การเก็บข้อมูล
+ข้อมูลเก็บในไฟล์ data.json บน Render Server
+เมื่อ redeploy ใหม่ ข้อมูลจะหาย
+แนะนำสำหรับการใช้งานจริง:
+
+ใช้ MongoDB Atlas (ฟรี 512MB)
+หรือ JSONBin.io (ฟรี)
+
+🆘 Troubleshooting
+บอทไม่ตอบ
+✅ เช็คว่า Render Deploy สำเร็จ (สถานะ "Live")
+✅ เช็ค Webhook URL ใน LINE Developers (กด Verify ต้องขึ้น Success)
+✅ เช็ค Environment Variables ใน Render ว่าถูกต้อง
+✅ ดู Logs ใน Render → Tab "Logs"
+บอทหยุดทำงาน
+✅ ตรวจสอบ UptimeRobot ว่า active อยู่
+✅ ดูสถานะ Render (ต้องเป็น "Live" สีเขียว)
+
+ข้อมูลหาย
+❌ Render Free Tier ไม่ persistent
+✅ ใช้ MongoDB Atlas หรือ JSONBin แทน
+
+📊 การใช้งาน (ตัวอย่าง)
+```bash
+👤 User: ตั้งเวลา 1 08.00
+🤖 Bot: ✅ ตั้งเวลาที่ 1 เป็น 08:00 น. แล้ว
+
+👤 User: เพิ่ม ยาลดความดัน 30 1 1
+🤖 Bot: ✅ เพิ่มยาสำเร็จ!
+        💊 ยาลดความดัน
+           • จำนวน: 30 เม็ด
+           • กินครั้งละ: 1 เม็ด
+           • เวลาที่ 1 (08:00 น.)
+
+━━━━━━ [08:00 น.] ━━━━━━
+
+🤖 Bot: 🔔 เตือนกินยาครั้งที่ 1 (08:00 น.)
+        ━━━━━━━━━━━━━━━━━━
+        💊 ยาลดความดัน
+           • กิน 1 เม็ด
+           • คงเหลือ 30 เม็ด
+        
+        ✅ ตอบกลับด้วย:
+        • พิมพ์ "กินแล้ว"
+        • หรือส่ง Sticker อะไรก็ได้!
+
+👤 User: *ส่ง Sticker* 🎉
+
+🤖 Bot: ✅ บันทึกการกินยาแล้ว!
+        💊 ยาลดความดัน
+           • คงเหลือ 29 เม็ด
+        🎉 เยี่ยมมาก! อย่าลืมกินยาทุกวันนะ
+
+━━━━━━ [เมื่อยาเหลือ 10 เม็ด] ━━━━━━
+
+🤖 Bot: ⚠️ เตือนยาใกล้หมดครั้งที่ 1
+        💊 ยาลดความดัน
+           • เหลือเพียง 10 เม็ด
+           • ⚡ ควรเตรียมซื้อยาเพิ่ม
+```
+🤝 Contributing
+ยินดีรับ Pull Request!
+
+Fork repository
+สร้าง feature branch (git checkout -b feature/AmazingFeature)
+Commit การเปลี่ยนแปลง (git commit -m 'Add some AmazingFeature')
+Push ไปยัง branch (git push origin feature/AmazingFeature)
+เปิด Pull Request
+
+📝 License
+MIT License - ใช้ได้ฟรี แก้ไขได้ตามสบาย
+
+👨‍💻 Author
+สร้างด้วย ❤️ สำหรับคนที่ต้องกินยาทุกวัน
