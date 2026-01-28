@@ -16,6 +16,11 @@ const app = express();
 // ================== FILE-BASED STORAGE ==================
 const DATA_FILE = path.join(__dirname, 'data.json');
 
+// ฟังก์ชันช่วยดึงเวลาไทย
+function getThaiDate() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+}
+
 function loadData() {
   try {
     if (fs.existsSync(DATA_FILE)) {
@@ -288,8 +293,11 @@ async function handleStickerMessage(event, userId, user) {
   const pending = getPendingReminder(userId);
   
   if (!pending) {
-    const now = new Date();
+    // 🔥 แก้ตรงนี้: ใช้ getThaiDate()
+    const now = getThaiDate();
     const currentHour = now.getHours();
+    
+    // ... (code ส่วนที่เหลือเหมือนเดิม)
     const time1Hour = parseInt(user.settings.time1.split(':')[0]);
     const time2Hour = parseInt(user.settings.time2.split(':')[0]);
     
@@ -601,7 +609,9 @@ async function sendReminders(timeSlot) {
   
   for (const [userId, user] of Object.entries(data)) {
     const targetTime = timeSlot === 1 ? user.settings.time1 : user.settings.time2;
-    const now = new Date();
+    
+    // 🔥 แก้ตรงนี้: ใช้ getThaiDate() แทน new Date()
+    const now = getThaiDate();
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     
     if (currentTime !== targetTime) continue;
