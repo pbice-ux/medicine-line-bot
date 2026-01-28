@@ -1,0 +1,17 @@
+{
+  "name": "medicine-line-bot",
+  "version": "1.0.0",
+  "description": "LINE Bot for medicine reminders",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^7.5.2",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.2"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
