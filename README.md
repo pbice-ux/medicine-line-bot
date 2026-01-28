@@ -102,19 +102,26 @@ ok / โอเค - บันทึกว่างินแล้ว
 ```bash
 git clone https://github.com/YOUR_USERNAME/medicine-line-bot.git
 cd medicine-line-bot
-
+```
 ### 2. ติดตั้ง Dependencies
+```bash
 npm install
+```
 
 3. ตั้งค่า Environment Variables
 สร้างไฟล์ .env:
+```bash
 CHANNEL_ACCESS_TOKEN=your_channel_access_token_here
 CHANNEL_SECRET=your_channel_secret_here
-
-4. รันบอท (Local)
+```
+5. รันบอท (Local)
+```bash
 npm start
+```
 เปิดเบราว์เซอร์ที่ http://localhost:3000 ควรเห็น:
+```bash
 💊 Medicine Bot is running!
+```
 
 🚀 Deploy to Render (Free)
 ขั้นตอนที่ 1: เตรียม Repository
