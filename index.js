@@ -81,6 +81,14 @@ async function saveUser(lineUserId, userData) {
   }
 }
 
+async function deleteUserData(lineUserId) {
+  try {
+    await redis.del(`user:${lineUserId}`);
+  } catch (error) {
+    console.error("❌ Redis Delete Error:", error.message);
+  }
+}
+
 async function getAllUsers() {
   try {
     const keys = await redis.keys("user:*");
@@ -234,6 +242,14 @@ async function handleMessage(event) {
       return await handleTakeDrug(replyToken, text, lineUserId, true);
     }
 
+    // Reset commands
+    if (text === "รีเซ็ท" || text === "รีเซ็ทข้อมูล") {
+      return await handleResetStart(replyToken, lineUserId);
+    }
+    if (text === "ยืนยันรีเซ็ท") {
+      return await handleResetConfirm(replyToken, lineUserId);
+    }
+
     return await reply(
       replyToken,
       `❓ ไม่เข้าใจคำสั่งค่ะ\n\n💡 พิมพ์ "help" หรือ "วิธีใช้" ดูคำสั่งทั้งหมด`
@@ -263,6 +279,21 @@ async function handleUserState(replyToken, lineUserId, text) {
     }
   }
 
+  if (state.action === "confirmReset") {
+    if (text === "ยืนยันรีเซ็ท") {
+      await deleteUserData(lineUserId);
+      delete userStates[lineUserId];
+
+      return await reply(
+        replyToken,
+        `✅ รีเซ็ทข้อมูลสำเร็จ!\n━━━━━━━━━━━━━━━━━━━\n\n🔄 ข้อมูลทั้งหมดถูกลบแล้ว\n\n💡 เริ่มใช้งานใหม่:\nพิมพ์: ลงทะเบียน [รหัสผู้ป่วย]`
+      );
+    } else {
+      delete userStates[lineUserId];
+      return await reply(replyToken, "❌ ยกเลิกการรีเซ็ทค่ะ");
+    }
+  }
+
   delete userStates[lineUserId];
   return null;
 }
@@ -284,6 +315,7 @@ Bot นี้จะช่วยเตือนเวลากินยา
 2️⃣ จัดการยา → help เพิ่มยา
 3️⃣ จัดการเวลา → help เวลากินยา
 4️⃣ บันทึกการกิน → help กินยา
+5️⃣ รีเซ็ทข้อมูล → help รีเซ็ท
 
 ━━━━━━━━━━━━━━━━━━━━━
 ⚡ คำสั่งด่วน:
@@ -301,70 +333,180 @@ async function sendTopicHelp(replyToken, topic) {
   const helps = {
     ลงทะเบียน: `📝 วิธีลงทะเบียน
 ━━━━━━━━━━━━━━━━━━━
-พิมพ์: ลงทะเบียน [รหัสผู้ป่วย]
+🔹 คำสั่ง:
+ลงทะเบียน [รหัสผู้ป่วย]
 
 📌 ตัวอย่าง:
 ลงทะเบียน HN12345
 
+━━━━━━━━━━━━━━━━━━━
 ✅ หลังลงทะเบียน:
 • เวลาเตือนเริ่มต้น: 08:00, 20:00
-• สามารถเพิ่มยาได้เลย`,
+• สามารถเพิ่มยาได้เลย
+• ระบบจะเตือนตามเวลาที่ตั้งไว้`,
 
     เพิ่มยา: `💊 วิธีเพิ่มยา
 ━━━━━━━━━━━━━━━━━━━
-พิมพ์: เพิ่มยา [ชื่อยา] [จำนวน]
+🔹 คำสั่ง:
+เพิ่มยา [ชื่อยา] [จำนวน]
 
 📌 ตัวอย่าง:
 • เพิ่มยา พาราเซตามอล 30
-• เพิ่มยา ยาลดความดัน 20`,
+• เพิ่มยา ยาลดความดัน 20
+• เพิ่มยา วิตามินซี 60
+
+━━━━━━━━━━━━━━━━━━━
+✅ สิ่งที่เกิดขึ้น:
+• ยาจะถูกเพิ่มเข้าระบบ
+• ระบบจะแจ้งเตือนเมื่อยาใกล้หมด`,
 
     เติมยา: `📦 วิธีเติมยา
 ━━━━━━━━━━━━━━━━━━━
+🔹 ขั้นตอน:
 1. พิมพ์ "เติมยา"
-2. ดูรายการยาพร้อมเลข
+2. ดูรายการยาพร้อมหมายเลข
 3. พิมพ์ "เติมยา [เลข] [จำนวน]"
 
 📌 ตัวอย่าง:
-เติมยา 1 30`,
+Step 1: พิมพ์ "เติมยา"
+Step 2: ระบบแสดง
+  1. พาราฯ (5 เม็ด) 🔴
+  2. ยาลดความดัน (15 เม็ด)
+Step 3: พิมพ์ "เติมยา 1 30"
+
+━━━━━━━━━━━━━━━━━━━
+✅ ผลลัพธ์:
+ยาเลข 1 จะมีจำนวนเพิ่มขึ้น 30 เม็ด`,
 
     ยกเลิกยา: `🗑️ วิธียกเลิก/ลบยา
 ━━━━━━━━━━━━━━━━━━━
+🔹 ขั้นตอน:
 1. พิมพ์ "ยกเลิกยา"
-2. ดูรายการยา
+2. ดูรายการยาพร้อมหมายเลข
 3. พิมพ์ "ยกเลิกยา [เลข]"
 4. พิมพ์ "ยืนยัน" เพื่อลบ
 
-⚠️ ลบแล้วไม่สามารถกู้คืนได้`,
+📌 ตัวอย่าง:
+Step 1: พิมพ์ "ยกเลิกยา"
+Step 2: พิมพ์ "ยกเลิกยา 1"
+Step 3: ระบบถามยืนยัน
+Step 4: พิมพ์ "ยืนยัน"
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ คำเตือน:
+ลบแล้วไม่สามารถกู้คืนได้!`,
 
     ดูยา: `📋 วิธีดูรายการยา
 ━━━━━━━━━━━━━━━━━━━
-พิมพ์: ดูยา
+🔹 คำสั่ง:
+ดูยา หรือ รายการยา
 
+━━━━━━━━━━━━━━━━━━━
 🎨 ความหมายสัญลักษณ์:
-✅ ยามีเพียงพอ (มากกว่า 10 เม็ด)
-🟡 ยาเหลือน้อย (เหลือ 6-10 เม็ด)
-🔴 ยาใกล้หมด (เหลือ 1-5 เม็ด)
-🚫 ยาหมดแล้ว (0 เม็ด)`,
+
+✅ สีเขียว (ปกติ)
+   มียามากกว่า 10 เม็ด
+
+🟡 สีเหลือง (เหลือน้อย)
+   มียาเหลือ 6-10 เม็ด
+   ควรเตรียมซื้อเพิ่ม
+
+🔴 สีแดง (ใกล้หมด!)
+   มียาเหลือเพียง 1-5 เม็ด
+   ต้องซื้อเพิ่มด่วน!
+
+🚫 หมดแล้ว
+   ไม่มียาเหลือเลย (0 เม็ด)`,
 
     เวลากินยา: `⏰ วิธีจัดการเวลากินยา
 ━━━━━━━━━━━━━━━━━━━
-🔹 ดูเวลา: เวลากินยา
+🔹 ดูเวลาทั้งหมด:
+เวลากินยา หรือ ดูเวลากินยา
 
-🔹 เพิ่มเวลา:
+🔹 เพิ่มเวลาใหม่:
 เพิ่มเวลากินยา [เวลา]
-ตัวอย่าง: เพิ่มเวลากินยา 12:00
+
+📌 ตัวอย่าง:
+• เพิ่มเวลากินยา 12:00
+• เพิ่มเวลากินยา 18.30
+• เพิ่มเวลากินยา 06:00
 
 🔹 ลบเวลา:
-ลบเวลากินยา [เลข]`,
+ลบเวลากินยา [เลข]
+
+📌 ตัวอย่าง:
+ลบเวลากินยา 3
+
+━━━━━━━━━━━━━━━━━━━
+✅ หมายเหตุ:
+• เวลาเริ่มต้น: 08:00, 20:00
+• เพิ่มได้ไม่จำกัดจำนวน
+• ใช้เครื่องหมาย : หรือ . ได้
+• ต้องมีอย่างน้อย 1 เวลา`,
 
     กินยา: `✅ วิธีบันทึกการกินยา
 ━━━━━━━━━━━━━━━━━━━
-🟢 กินตรงเวลา:
-กินยา [เลขเวลา]
+มี 2 แบบ:
 
-🟡 กินช้า (เกิน 30 นาที):
+━━━━━━━━━━━━━━━━━━━
+🟢 แบบที่ 1: กินตรงเวลา
+━━━━━━━━━━━━━━━━━━━
+ใช้เมื่อ: กินยาภายใน 30 นาที
+หลังจากเวลาที่ระบบเตือน
+
+🔹 คำสั่ง:
+กินยา [หมายเลขเวลา]
+
+📌 ตัวอย่าง:
+• กินยา 1 = กินยาเวลาที่ 1 (08:00)
+• กินยา 2 = กินยาเวลาที่ 2 (20:00)
+
+━━━━━━━━━━━━━━━━━━━
+🟡 แบบที่ 2: กินยาช้า
+━━━━━━━━━━━━━━━━━━━
+ใช้เมื่อ: กินยาช้าเกิน 30 นาที
+
+🔹 ขั้นตอน:
 1. พิมพ์ "กินยาช้า"
-2. พิมพ์ "กินยาช้า [เลข]"`,
+2. ดูรายการเวลา
+3. พิมพ์ "กินยาช้า [เลข]"
+
+📌 ตัวอย่าง:
+กินยาช้า 1
+
+━━━━━━━━━━━━━━━━━━━
+✅ ผลลัพธ์:
+• ระบบบันทึกการกินยา
+• จำนวนยาลดลงอัตโนมัติ
+• แสดงสถานะยาที่เหลือ`,
+
+    รีเซ็ท: `🔄 วิธีรีเซ็ทข้อมูล
+━━━━━━━━━━━━━━━━━━━
+🔹 คำสั่ง:
+รีเซ็ท หรือ รีเซ็ทข้อมูล
+
+🔹 ขั้นตอน:
+1. พิมพ์ "รีเซ็ท"
+2. ระบบจะถามยืนยัน
+3. พิมพ์ "ยืนยันรีเซ็ท"
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ ข้อมูลที่จะถูกลบ:
+
+❌ รายการยาทั้งหมด
+❌ เวลากินยาที่ตั้งไว้
+❌ ประวัติการกินยา
+❌ ข้อมูลผู้ใช้ทั้งหมด
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ คำเตือนสำคัญ:
+ข้อมูลที่ลบแล้วไม่สามารถกู้คืนได้!
+กรุณาตรวจสอบให้แน่ใจก่อนยืนยัน
+
+━━━━━━━━━━━━━━━━━━━
+✅ หลังรีเซ็ท:
+ต้องลงทะเบียนใหม่อีกครั้ง
+พิมพ์: ลงทะเบียน [รหัสผู้ป่วย]`,
   };
 
   const text =
@@ -378,7 +520,10 @@ async function sendTopicHelp(replyToken, topic) {
 • help ยกเลิกยา
 • help ดูยา
 • help เวลากินยา
-• help กินยา`;
+• help กินยา
+• help รีเซ็ท
+
+💡 พิมพ์ "help" เพื่อดูภาพรวมทั้งหมด`;
 
   return await reply(replyToken, text);
 }
@@ -391,7 +536,7 @@ async function handleRegister(replyToken, text, lineUserId) {
   if (existing) {
     return await reply(
       replyToken,
-      `❌ คุณลงทะเบียนแล้วค่ะ\n📋 รหัสผู้ป่วย: ${existing.odotId}`
+      `❌ คุณลงทะเบียนแล้วค่ะ\n📋 รหัสผู้ป่วย: ${existing.odotId}\n\n💡 หากต้องการเริ่มใหม่:\nพิมพ์: รีเซ็ท`
     );
   }
 
@@ -413,7 +558,10 @@ async function handleRegister(replyToken, text, lineUserId) {
 ⏰ เวลาเตือน: 08:00, 20:00
 
 💡 ขั้นตอนต่อไป:
-พิมพ์: เพิ่มยา [ชื่อยา] [จำนวน]`
+พิมพ์: เพิ่มยา [ชื่อยา] [จำนวน]
+
+📚 ดูวิธีใช้:
+พิมพ์: help`
   );
 }
 
@@ -423,7 +571,7 @@ async function handleAddDrug(replyToken, text, lineUserId) {
   if (!user) {
     return await reply(
       replyToken,
-      `❌ กรุณาลงทะเบียนก่อนค่ะ\n\nพิมพ์: ลงทะเบียน [รหัสผู้ป่วย]`
+      `❌ กรุณาลงทะเบียนก่อนค่ะ\n\nพิมพ์: ลงทะเบียน [รหัสผู้ป่วย]\nตัวอย่าง: ลงทะเบียน HN12345`
     );
   }
 
@@ -431,7 +579,7 @@ async function handleAddDrug(replyToken, text, lineUserId) {
   if (parts.length < 2) {
     return await reply(
       replyToken,
-      `❌ รูปแบบไม่ถูกต้องค่ะ\n\nพิมพ์: เพิ่มยา [ชื่อยา] [จำนวน]\nตัวอย่าง: เพิ่มยา พาราเซตามอล 30`
+      `❌ รูปแบบไม่ถูกต้องค่ะ\n\nพิมพ์: เพิ่มยา [ชื่อยา] [จำนวน]\nตัวอย่าง: เพิ่มยา พาราเซตามอล 30\n\n💡 พิมพ์ "help เพิ่มยา" ดูรายละเอียด`
     );
   }
 
@@ -439,7 +587,10 @@ async function handleAddDrug(replyToken, text, lineUserId) {
   const name = parts.join(" ");
 
   if (isNaN(quantity) || quantity <= 0) {
-    return await reply(replyToken, `❌ จำนวนต้องเป็นตัวเลขมากกว่า 0 ค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ จำนวนไม่ถูกต้องค่ะ\nต้องเป็นตัวเลขมากกว่า 0`
+    );
   }
 
   user.drugs.push({ name, quantity });
@@ -447,7 +598,7 @@ async function handleAddDrug(replyToken, text, lineUserId) {
 
   return await reply(
     replyToken,
-    `✅ เพิ่มยาสำเร็จ!\n━━━━━━━━━━━━━━━━━━━\n💊 ยา: ${name}\n📦 จำนวน: ${quantity} เม็ด`
+    `✅ เพิ่มยาสำเร็จ!\n━━━━━━━━━━━━━━━━━━━\n💊 ยา: ${name}\n📦 จำนวน: ${quantity} เม็ด\n\n💡 พิมพ์ "ดูยา" เพื่อดูรายการทั้งหมด`
   );
 }
 
@@ -461,7 +612,7 @@ async function handleShowDrugs(replyToken, lineUserId) {
   if (user.drugs.length === 0) {
     return await reply(
       replyToken,
-      `📋 ยังไม่มียาในระบบค่ะ\n\nเพิ่มยา: เพิ่มยา [ชื่อยา] [จำนวน]`
+      `📋 ยังไม่มียาในระบบค่ะ\n\nเพิ่มยา: เพิ่มยา [ชื่อยา] [จำนวน]\nตัวอย่าง: เพิ่มยา พาราเซตามอล 30`
     );
   }
 
@@ -485,7 +636,7 @@ async function handleShowDrugs(replyToken, lineUserId) {
     list += `\n${i + 1}. ${icon} ${drug.name}\n   📦 ${drug.quantity} เม็ด${note}\n`;
   });
 
-  list += `\n💡 คำสั่งที่เกี่ยวข้อง:\n• เติมยา - เติมจำนวนยา\n• ยกเลิกยา - ลบยา`;
+  list += `\n━━━━━━━━━━━━━━━━━━━\n💡 คำสั่งที่เกี่ยวข้อง:\n• เติมยา - เติมจำนวนยา\n• ยกเลิกยา - ลบยา`;
 
   return await reply(replyToken, list);
 }
@@ -508,7 +659,7 @@ async function handleRefillStart(replyToken, lineUserId) {
     list += `${i + 1}. ${drug.name} (${drug.quantity} เม็ด)${icon}\n`;
   });
 
-  list += `\n📝 พิมพ์: เติมยา [เลข] [จำนวน]\nตัวอย่าง: เติมยา 1 30`;
+  list += `\n━━━━━━━━━━━━━━━━━━━\n📝 พิมพ์: เติมยา [เลข] [จำนวน]\nตัวอย่าง: เติมยา 1 30`;
 
   return await reply(replyToken, list);
 }
@@ -521,7 +672,7 @@ async function handleRefill(replyToken, text, lineUserId) {
   if (parts.length < 2) {
     return await reply(
       replyToken,
-      `❌ รูปแบบไม่ถูกต้องค่ะ\n\nพิมพ์: เติมยา [เลข] [จำนวน]`
+      `❌ รูปแบบไม่ถูกต้องค่ะ\n\nพิมพ์: เติมยา [เลข] [จำนวน]\n\n💡 พิมพ์ "เติมยา" เพื่อดูรายการก่อน`
     );
   }
 
@@ -533,7 +684,10 @@ async function handleRefill(replyToken, text, lineUserId) {
   }
 
   if (index < 0 || index >= user.drugs.length) {
-    return await reply(replyToken, `❌ ไม่พบยาหมายเลขนี้ค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ ไม่พบยาหมายเลขนี้ค่ะ\n\n💡 พิมพ์ "เติมยา" เพื่อดูรายการ`
+    );
   }
 
   user.drugs[index].quantity += qty;
@@ -541,7 +695,7 @@ async function handleRefill(replyToken, text, lineUserId) {
 
   return await reply(
     replyToken,
-    `✅ เติมยาสำเร็จ!\n━━━━━━━━━━━━━━━━━━━\n💊 ยา: ${user.drugs[index].name}\n📦 รวมทั้งหมด: ${user.drugs[index].quantity} เม็ด`
+    `✅ เติมยาสำเร็จ!\n━━━━━━━━━━━━━━━━━━━\n💊 ยา: ${user.drugs[index].name}\n📦 เติมเพิ่ม: +${qty} เม็ด\n📊 รวมทั้งหมด: ${user.drugs[index].quantity} เม็ด`
   );
 }
 
@@ -556,7 +710,7 @@ async function handleCancelStart(replyToken, lineUserId) {
   user.drugs.forEach((drug, i) => {
     list += `${i + 1}. ${drug.name} (${drug.quantity} เม็ด)\n`;
   });
-  list += `\n📝 พิมพ์: ยกเลิกยา [เลข]\n⚠️ ลบแล้วไม่สามารถกู้คืนได้`;
+  list += `\n━━━━━━━━━━━━━━━━━━━\n📝 พิมพ์: ยกเลิกยา [เลข]\nตัวอย่าง: ยกเลิกยา 1\n\n⚠️ ลบแล้วไม่สามารถกู้คืนได้`;
 
   return await reply(replyToken, list);
 }
@@ -568,7 +722,10 @@ async function handleCancel(replyToken, text, lineUserId) {
   const index = parseInt(text.replace("ยกเลิกยา ", "").trim()) - 1;
 
   if (isNaN(index) || index < 0 || index >= user.drugs.length) {
-    return await reply(replyToken, `❌ ไม่พบยาหมายเลขนี้ค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ ไม่พบยาหมายเลขนี้ค่ะ\n\n💡 พิมพ์ "ยกเลิกยา" เพื่อดูรายการ`
+    );
   }
 
   const drug = user.drugs[index];
@@ -580,7 +737,7 @@ async function handleCancel(replyToken, text, lineUserId) {
 
   return await reply(
     replyToken,
-    `⚠️ ยืนยันการลบยา\n━━━━━━━━━━━━━━━━━━━\n💊 ยา: ${drug.name}\n📦 คงเหลือ: ${drug.quantity} เม็ด\n\n✅ พิมพ์ "ยืนยัน" หรือ "ใช่" เพื่อลบ\n❌ พิมพ์อย่างอื่นเพื่อยกเลิก`
+    `⚠️ ยืนยันการลบยา\n━━━━━━━━━━━━━━━━━━━\n💊 ยา: ${drug.name}\n📦 คงเหลือ: ${drug.quantity} เม็ด\n\n❓ ต้องการลบยานี้หรือไม่?\n\n✅ พิมพ์ "ยืนยัน" หรือ "ใช่" เพื่อลบ\n❌ พิมพ์อย่างอื่นเพื่อยกเลิก`
   );
 }
 
@@ -597,7 +754,7 @@ async function handleShowTimes(replyToken, lineUserId) {
   times.forEach((t, i) => {
     list += `${i + 1}. 🕐 ${t} น.\n`;
   });
-  list += `\n💡 คำสั่งที่เกี่ยวข้อง:\n• เพิ่มเวลากินยา [เวลา]\n• ลบเวลากินยา [เลข]`;
+  list += `\n━━━━━━━━━━━━━━━━━━━\n💡 คำสั่งที่เกี่ยวข้อง:\n• เพิ่มเวลากินยา [เวลา]\n• ลบเวลากินยา [เลข]`;
 
   return await reply(replyToken, list);
 }
@@ -617,14 +774,17 @@ async function handleAddTime(replyToken, text, lineUserId) {
   if (!regex.test(time)) {
     return await reply(
       replyToken,
-      `❌ รูปแบบเวลาไม่ถูกต้องค่ะ\n\nตัวอย่าง: เพิ่มเวลากินยา 12:00`
+      `❌ รูปแบบเวลาไม่ถูกต้องค่ะ\n\nตัวอย่างที่ถูกต้อง:\n• เพิ่มเวลากินยา 12:00\n• เพิ่มเวลากินยา 18.30`
     );
   }
 
   if (!user.reminderTimes) user.reminderTimes = ["08:00", "20:00"];
 
   if (user.reminderTimes.includes(time)) {
-    return await reply(replyToken, `❌ มีเวลา ${time} อยู่แล้วค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ มีเวลา ${time} อยู่แล้วค่ะ\n\n💡 พิมพ์ "เวลากินยา" เพื่อดูเวลาทั้งหมด`
+    );
   }
 
   user.reminderTimes.push(time);
@@ -649,13 +809,16 @@ async function handleRemoveTime(replyToken, text, lineUserId) {
   const times = user.reminderTimes || ["08:00", "20:00"];
 
   if (isNaN(index) || index < 0 || index >= times.length) {
-    return await reply(replyToken, `❌ ไม่พบเวลาหมายเลขนี้ค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ ไม่พบเวลาหมายเลขนี้ค่ะ\n\n💡 พิมพ์ "เวลากินยา" เพื่อดูเวลาทั้งหมด`
+    );
   }
 
   if (times.length <= 1) {
     return await reply(
       replyToken,
-      `❌ ไม่สามารถลบได้ค่ะ\nต้องมีเวลากินยาอย่างน้อย 1 เวลา`
+      `❌ ไม่สามารถลบได้ค่ะ\n\nต้องมีเวลากินยาอย่างน้อย 1 เวลา`
     );
   }
 
@@ -663,9 +826,13 @@ async function handleRemoveTime(replyToken, text, lineUserId) {
   user.reminderTimes.splice(index, 1);
   await saveUser(lineUserId, user);
 
+  const timeList = user.reminderTimes
+    .map((t, i) => `${i + 1}. ${t}`)
+    .join("\n");
+
   return await reply(
     replyToken,
-    `✅ ลบเวลา ${removed} แล้วค่ะ\n\n📋 เวลาที่เหลือ:\n${user.reminderTimes.join("\n")}`
+    `✅ ลบเวลา ${removed} แล้วค่ะ\n━━━━━━━━━━━━━━━━━━━\n📋 เวลาที่เหลือ:\n${timeList}`
   );
 }
 
@@ -680,7 +847,7 @@ async function handleLateStart(replyToken, lineUserId) {
   times.forEach((t, i) => {
     list += `${i + 1}. 🕐 ${t} น.\n`;
   });
-  list += `\n📝 พิมพ์: กินยาช้า [เลข]\nตัวอย่าง: กินยาช้า 1`;
+  list += `\n━━━━━━━━━━━━━━━━━━━\n📝 พิมพ์: กินยาช้า [เลข]\nตัวอย่าง: กินยาช้า 1\n\n💡 ใช้คำสั่งนี้เมื่อกินยาช้าเกิน 30 นาที`;
 
   return await reply(replyToken, list);
 }
@@ -696,11 +863,19 @@ async function handleTakeDrug(replyToken, text, lineUserId, isLate) {
   const times = user.reminderTimes || ["08:00", "20:00"];
 
   if (isNaN(index) || index < 0 || index >= times.length) {
-    return await reply(replyToken, `❌ ไม่พบเวลาหมายเลขนี้ค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ ไม่พบเวลาหมายเลขนี้ค่ะ\n\n💡 พิมพ์ "${
+        isLate ? "กินยาช้า" : "เวลากินยา"
+      }" เพื่อดูรายการ`
+    );
   }
 
   if (user.drugs.length === 0) {
-    return await reply(replyToken, `❌ ยังไม่มียาในระบบค่ะ`);
+    return await reply(
+      replyToken,
+      `❌ ยังไม่มียาในระบบค่ะ\n\n💡 เพิ่มยาก่อน:\nเพิ่มยา [ชื่อยา] [จำนวน]`
+    );
   }
 
   let status = "";
@@ -733,6 +908,50 @@ async function handleTakeDrug(replyToken, text, lineUserId, isLate) {
     replyToken,
     `✅ บันทึกการกินยาสำเร็จ!${lateText}\n━━━━━━━━━━━━━━━━━━━\n⏰ เวลากินยา: ${times[index]} น.\n📅 วันที่: ${dateStr}\n\n📊 สถานะยาหลังกิน:\n${status}`
   );
+}
+
+// ==================== Reset ====================
+async function handleResetStart(replyToken, lineUserId) {
+  const user = await getUser(lineUserId);
+  if (!user) {
+    return await reply(
+      replyToken,
+      `❌ ยังไม่มีข้อมูลในระบบค่ะ\n\nหากต้องการเริ่มใช้งาน:\nพิมพ์: ลงทะเบียน [รหัสผู้ป่วย]`
+    );
+  }
+
+  userStates[lineUserId] = {
+    action: "confirmReset",
+  };
+
+  return await reply(
+    replyToken,
+    `⚠️ ยืนยันการรีเซ็ทข้อมูล
+━━━━━━━━━━━━━━━━━━━
+
+🗑️ ข้อมูลที่จะถูกลบ:
+
+❌ รายการยา: ${user.drugs.length} รายการ
+❌ เวลากินยา: ${user.reminderTimes.length} เวลา
+❌ ข้อมูลผู้ใช้ทั้งหมด
+
+━━━━━━━━━━━━━━━━━━━
+⚠️ คำเตือนสำคัญ!
+
+ข้อมูลที่ลบแล้วไม่สามารถกู้คืนได้
+กรุณาตรวจสอบให้แน่ใจก่อนดำเนินการ
+
+━━━━━━━━━━━━━━━━━━━
+❓ ต้องการรีเซ็ทหรือไม่?
+
+✅ พิมพ์ "ยืนยันรีเซ็ท" เพื่อลบข้อมูล
+❌ พิมพ์อย่างอื่นเพื่อยกเลิก`
+  );
+}
+
+async function handleResetConfirm(replyToken, lineUserId) {
+  // This is handled in handleUserState
+  return null;
 }
 
 // ==================== Webhook ====================
