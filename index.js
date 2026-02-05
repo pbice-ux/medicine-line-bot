@@ -112,11 +112,9 @@ function startReminderSystem() {
   cron.schedule(
     "* * * * *",
     async () => {
-      const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-      const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(
-        now.getMinutes()
-      ).padStart(2, "0")}`;
-
+      const utcNow = new Date();
+      const now = new Date(utcNow.getTime() + (7 * 60 * 60 * 1000) + (utcNow.getTimezoneOffset() * 60 * 1000));
+      const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
       try {
         const users = await getAllUsers();
 
@@ -1184,7 +1182,8 @@ async function handleTakeDrug(replyToken, text, lineUserId, isLate) {
   await saveUser(lineUserId, user);
 
   const lateText = isLate ? " (กินช้า)" : "";
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+  const utcNow = new Date();
+  const now = new Date(utcNow.getTime() + (7 * 60 * 60 * 1000) + (utcNow.getTimezoneOffset() * 60 * 1000));
   const dateStr = now.toLocaleDateString("th-TH", {
     year: "numeric",
     month: "long",
